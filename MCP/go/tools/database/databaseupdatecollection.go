@@ -1,0 +1,103 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"bytes"
+
+	"github.com/appwrite/mcp-server/config"
+	"github.com/appwrite/mcp-server/models"
+	"github.com/mark3labs/mcp-go/mcp"
+)
+
+func DatabaseupdatecollectionHandler(cfg *config.APIConfig) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, ok := request.Params.Arguments.(map[string]any)
+		if !ok {
+			return mcp.NewToolResultError("Invalid arguments object"), nil
+		}
+		collectionIdVal, ok := args["collectionId"]
+		if !ok {
+			return mcp.NewToolResultError("Missing required path parameter: collectionId"), nil
+		}
+		collectionId, ok := collectionIdVal.(string)
+		if !ok {
+			return mcp.NewToolResultError("Invalid path parameter: collectionId"), nil
+		}
+		// Create properly typed request body using the generated schema
+		var requestBody map[string]interface{}
+		
+		// Optimized: Single marshal/unmarshal with JSON tags handling field mapping
+		if argsJSON, err := json.Marshal(args); err == nil {
+			if err := json.Unmarshal(argsJSON, &requestBody); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to convert arguments to request type: %v", err)), nil
+			}
+		} else {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to marshal arguments: %v", err)), nil
+		}
+		
+		bodyBytes, err := json.Marshal(requestBody)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to encode request body", err), nil
+		}
+		url := fmt.Sprintf("%s/database/collections/%s", cfg.BaseURL, collectionId)
+		req, err := http.NewRequest("PUT", url, bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to create request", err), nil
+		}
+		// Set authentication based on auth type
+		// Fallback to single auth parameter
+		if cfg.APIKey != "" {
+			req.Header.Set("X-Appwrite-Key", cfg.APIKey)
+		}
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Request failed", err), nil
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to read response body", err), nil
+		}
+
+		if resp.StatusCode >= 400 {
+			return mcp.NewToolResultError(fmt.Sprintf("API error: %s", body)), nil
+		}
+		// Use properly typed response
+		var result models.Collection
+		if err := json.Unmarshal(body, &result); err != nil {
+			// Fallback to raw text if unmarshaling fails
+			return mcp.NewToolResultText(string(body)), nil
+		}
+
+		prettyJSON, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to format JSON", err), nil
+		}
+
+		return mcp.NewToolResultText(string(prettyJSON)), nil
+	}
+}
+
+func CreateDatabaseupdatecollectionTool(cfg *config.APIConfig) models.Tool {
+	tool := mcp.NewTool("put_database_collections_collectionId",
+		mcp.WithDescription("Update Collection"),
+		mcp.WithString("collectionId", mcp.Required(), mcp.Description("Collection unique ID.")),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Input parameter: Collection name. Max length: 128 chars.")),
+		mcp.WithArray("read", mcp.Description("Input parameter: An array of strings with read permissions. By default inherits the existing read permissions. [learn more about permissions](/docs/permissions) and get a full list of available permissions.")),
+		mcp.WithArray("rules", mcp.Description("Input parameter: Array of [rule objects](/docs/rules). Each rule define a collection field name, data type and validation.")),
+		mcp.WithArray("write", mcp.Description("Input parameter: An array of strings with write permissions. By default inherits the existing write permissions. [learn more about permissions](/docs/permissions) and get a full list of available permissions.")),
+	)
+
+	return models.Tool{
+		Definition: tool,
+		Handler:    DatabaseupdatecollectionHandler(cfg),
+	}
+}
